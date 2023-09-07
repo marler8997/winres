@@ -7,6 +7,12 @@ const win32 = struct {
 };
 const win32fix = struct {
     // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
+    pub extern "kernel32" fn FindResourceW(
+        hModule: ?win32.HINSTANCE,
+        lpName: ?[*:0]const align(1) u16,
+        lpType: ?[*:0]const align(1) u16,
+    ) callconv(@import("std").os.windows.WINAPI) ?win32.HRSRC;
+    // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
     // also: this adds "const" to lpData
     pub extern "kernel32" fn UpdateResourceW(
         hUpdate: ?win32.HANDLE,
@@ -63,6 +69,7 @@ pub fn main() !void {
         return try std.io.getStdErr().writer().writeAll(
             \\Usage:
             \\   winres list <FILE>
+            \\   winres get <FILE> <TYPE> <NAME>
             \\   winres update <FILE> <TYPE> <NAME> <CONTENT>
             \\
             \\A resource <TYPE> or <NAME> can be one of:
@@ -81,6 +88,8 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, cmd, "list")) {
         try list(cmd_args);
+    } else if (std.mem.eql(u8, cmd, "get")) {
+        try get(cmd_args);
     } else if (std.mem.eql(u8, cmd, "update")) {
         try update(cmd_args);
     } else fatal("unknown command '{s}'", .{cmd});
@@ -198,7 +207,7 @@ fn freeResPtr(allocator: std.mem.Allocator, ptr: ?[*:0]const align(1) u16) void 
 }
 
 const ResTypeFormatter = struct {
-    ptr: ?[*:0]const u16,
+    ptr: ?[*:0]const align(1) u16,
     pub fn format(
         self: ResTypeFormatter,
         comptime fmt: []const u8,
@@ -211,14 +220,15 @@ const ResTypeFormatter = struct {
             const str: []const u8 = t.str() orelse "?";
             try writer.print("{}({s})", .{@intFromEnum(t), str});
         } else {
-            const str = std.mem.span(self.ptr orelse unreachable);
+            const ptr: [*:0]const u16 = @alignCast(self.ptr orelse unreachable);
+            const str = std.mem.span(ptr);
             try writer.print("\"{}\"", .{std.unicode.fmtUtf16le(str)});
         }
     }
 };
 
 const ResNameFormatter = struct {
-    ptr: ?[*:0]const u16,
+    ptr: ?[*:0]const align(1) u16,
     pub fn format(
         self: ResNameFormatter,
         comptime fmt: []const u8,
@@ -230,8 +240,9 @@ const ResNameFormatter = struct {
         if (resPtrAsInt(self.ptr)) |int| {
             try writer.print("{}", .{int});
         } else {
-            const name_str = std.mem.span(self.ptr orelse unreachable);
-            try writer.print("\"{}\"", .{std.unicode.fmtUtf16le(name_str)});
+            const ptr: [*:0]const u16 = @alignCast(self.ptr orelse unreachable);
+            const str = std.mem.span(ptr);
+            try writer.print("\"{}\"", .{std.unicode.fmtUtf16le(str)});
         }
     }
 };
@@ -282,6 +293,45 @@ fn listOnEnumNameW(
         ResNameFormatter{ .ptr = name },
     }) catch |e| fatalTrace(@errorReturnTrace(), "stdout print failed with {s}", .{@errorName(e)});
     return 1; // continue enumeration
+}
+
+fn get(args: []const [:0]const u8) !void {
+    if (args.len != 3)
+        fatal("get requires 3 arguments (file/type/name) but got {}", .{args.len});
+    const filename = args[0];
+    const type_arg = args[1];
+    const name_arg = args[2];
+
+    const type_ptr = parseAllocResType(global.arena, type_arg) catch |e|
+        fatal("invalid resource type '{s}': {s}", .{type_arg, @errorName(e)});
+    defer freeResPtr(global.arena, type_ptr);
+    const name_ptr = parseAllocResName(global.arena, name_arg) catch |e|
+        fatal("invalid resource name '{s}': {s}", .{name_arg, @errorName(e)});
+    defer freeResPtr(global.arena, name_ptr);
+
+    const mod = blk: {
+        const filename_w = try sliceToFileW(filename);
+        break :blk win32.LoadLibraryW(filename_w.span()) orelse
+            fatal("LoadLibrary '{s}' failed, error={}", .{filename, win32.GetLastError()});
+    };
+    // no need to free library, this is all temporary
+
+    const loc = win32fix.FindResourceW(mod, name_ptr, type_ptr) orelse
+        fatal("FindResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    const len = win32.SizeofResource(mod, loc);
+    if (len == 0)
+        fatal("SizeofResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    const res = win32.LoadResource(mod, loc);
+    if (res == 0)
+        fatal("LoadResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    const ptr: [*]u8 = @ptrCast(
+        win32.LockResource(res) orelse
+            fatal("LockResource failed with {s}", .{@tagName(win32.GetLastError())})
+    );
+    try std.io.getStdOut().writer().writeAll(ptr[0 .. len]);
 }
 
 fn update(args: []const [:0]const u8) !void {
