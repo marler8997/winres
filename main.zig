@@ -5,6 +5,23 @@ const win32 = struct {
     usingnamespace @import("win32").system.library_loader;
     usingnamespace @import("win32").ui.windows_and_messaging;
 };
+const win32fix = struct {
+    // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
+    // also: this adds "const" to lpData
+    pub extern "kernel32" fn UpdateResourceW(
+        hUpdate: ?win32.HANDLE,
+        lpType: ?[*:0]const align(1) u16,
+        lpName: ?[*:0]const align(1) u16,
+        wLanguage: u16,
+        lpData: ?*const anyopaque,
+        cb: u32,
+    ) callconv(@import("std").os.windows.WINAPI) win32.BOOL;
+};
+
+const global = struct {
+    var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const arena = arena_instance.allocator();
+};
 
 pub fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
     std.log.err(fmt, args);
@@ -21,16 +38,42 @@ pub fn fatalTrace(trace: ?*std.builtin.StackTrace, comptime fmt: []const u8, arg
     std.os.exit(0xff);
 }
 
+const predefined_names_for_usage = blk: {
+    var names: []const u8 = "";
+
+    const line_prefix = "   ";
+    var next_sep: []const u8 = line_prefix;
+    var line_len: usize = 0;
+    for (std.meta.fields(IntResType)) |field| {
+        line_len += next_sep.len + 1 + field.name.len;
+        if (line_len >= 80) {
+            next_sep = "\n" ++ line_prefix;
+            line_len = line_prefix.len + field.name.len;
+        }
+        names = names ++ next_sep ++ ":" ++ field.name;
+        next_sep = " ";
+    }
+    break :blk names ++ "\n";
+};
+
 pub fn main() !void {
-    var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const arena = arena_instance.allocator();
-    const all_args = std.process.argsAlloc(arena) catch |e|
+    const all_args = std.process.argsAlloc(global.arena) catch |e|
         fatalTrace(@errorReturnTrace(), "failed to get cmdline args with {s}", .{@errorName(e)});
     if (all_args.len <= 1)
         return try std.io.getStdErr().writer().writeAll(
             \\Usage:
             \\   winres list <FILE>
+            \\   winres update <FILE> <TYPE> <NAME> <CONTENT>
             \\
+            \\A resource <TYPE> or <NAME> can be one of:
+            \\  * an unsigned integer
+            \\  * a predefined name of the form ":name" (i.e. :cursor or :rcdata)
+            \\  * otherwise, it'll be interpreted as a string name
+            \\
+            \\Predefined resource types:
+            \\
+            ++
+            predefined_names_for_usage
         );
 
     const cmd = all_args[1];
@@ -38,10 +81,19 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, cmd, "list")) {
         try list(cmd_args);
+    } else if (std.mem.eql(u8, cmd, "update")) {
+        try update(cmd_args);
     } else fatal("unknown command '{s}'", .{cmd});
 }
 
-pub fn resPtrAsInt(res_ptr: ?[*:0]const u16) ?u16 {
+pub fn sliceToFileW(path: []const u8) !std.os.windows.PathSpace {
+    var temp_path: std.os.windows.PathSpace = undefined;
+    temp_path.len = try std.unicode.utf8ToUtf16Le(&temp_path.data, path);
+    temp_path.data[temp_path.len] = 0;
+    return temp_path;
+}
+
+pub fn resPtrAsInt(res_ptr: ?[*:0]const align(1) u16) ?u16 {
     const res_int: u16 = @intCast(0xffff & @intFromPtr(res_ptr));
     return if (res_int == @intFromPtr(res_ptr)) res_int else null;
 }
@@ -70,8 +122,12 @@ const IntResType = enum (u16) {
     manifest      = 24,
     _,
 
-    pub fn tryFrom(res_type_ptr: ?[*:0]const u16) ?IntResType {
+    pub fn tryFrom(res_type_ptr: ?[*:0]const align(1) u16) ?IntResType {
         return if (resPtrAsInt(res_type_ptr)) |int| @enumFromInt(int) else null;
+    }
+
+    pub fn asPtr(self: IntResType) ?[*:0]const align(1) u16 {
+        return @ptrFromInt(@intFromEnum(self));
     }
 
     pub fn str(self: IntResType) ?[]const u8 {
@@ -101,6 +157,45 @@ const IntResType = enum (u16) {
         };
     }
 };
+
+fn parseAllocResName(allocator: std.mem.Allocator, arg: []const u8) error{
+    Overflow,
+    OutOfMemory,
+    InvalidUtf8,
+}!?[*:0]const align(1) u16 {
+    if (std.fmt.parseInt(u16, arg, 10)) |int_value| {
+        return @ptrFromInt(int_value);
+    } else |err| switch (err) {
+        error.Overflow => |e| return e,
+        error.InvalidCharacter => {},
+    }
+    return try std.unicode.utf8ToUtf16LeWithNull(allocator, arg);
+}
+fn parseAllocResType(allocator: std.mem.Allocator, arg: []const u8) error{
+    NotPredefined,
+    Overflow,
+    OutOfMemory,
+    InvalidUtf8,
+}!?[*:0]const align(1) u16 {
+    const predefined_prefix = ":";
+
+    // TODO: allow use of "::" to specify a string that starts with a ":"
+    if (std.mem.startsWith(u8, arg, predefined_prefix)) {
+        const predefined_name = arg[predefined_prefix.len..];
+        // TODO: a map might be better?
+        inline for (std.meta.fields(IntResType)) |field| {
+            if (std.mem.eql(u8, field.name, predefined_name))
+                return @as(IntResType, @enumFromInt(field.value)).asPtr();
+        }
+        return error.NotPredefined;
+    }
+
+    return parseAllocResName(allocator, arg);
+}
+fn freeResPtr(allocator: std.mem.Allocator, ptr: ?[*:0]const align(1) u16) void {
+    if (resPtrAsInt(ptr)) |_| return;
+    allocator.free(std.mem.span(@as([*:0]const u16, @alignCast(ptr.?))));
+}
 
 const ResTypeFormatter = struct {
     ptr: ?[*:0]const u16,
@@ -145,9 +240,11 @@ fn list(args: []const [:0]const u8) !void {
     if (args.len != 1)
         fatal("list requires 1 argument (a binary filename) but got {}", .{args.len});
     const filename = args[0];
-    // NOTE: I had an issue trying to use LoadLibraryW
-    const mod = win32.LoadLibraryA(filename) orelse
-        fatal("LoadLibrary '{s}' failed, error={}", .{filename, win32.GetLastError()});
+    const mod = blk: {
+        const filename_w = try sliceToFileW(filename);
+        break :blk win32.LoadLibraryW(filename_w.span()) orelse
+            fatal("LoadLibrary '{s}' failed, error={}", .{filename, win32.GetLastError()});
+    };
     // no need to free library, this is all temporary
 
     if (0 == win32.EnumResourceTypesW(mod, &listOnEnumTypeW, 0)) {
@@ -185,4 +282,41 @@ fn listOnEnumNameW(
         ResNameFormatter{ .ptr = name },
     }) catch |e| fatalTrace(@errorReturnTrace(), "stdout print failed with {s}", .{@errorName(e)});
     return 1; // continue enumeration
+}
+
+fn update(args: []const [:0]const u8) !void {
+    if (args.len != 4)
+        fatal("update requires 4 arguments (file/type/name/content) but got {}", .{args.len});
+    const filename = args[0];
+    const type_arg = args[1];
+    const name_arg = args[2];
+    const content = args[3];
+
+    const type_ptr = parseAllocResType(global.arena, type_arg) catch |e|
+        fatal("invalid resource type '{s}': {s}", .{type_arg, @errorName(e)});
+    defer freeResPtr(global.arena, type_ptr);
+    const name_ptr = parseAllocResName(global.arena, name_arg) catch |e|
+        fatal("invalid resource name '{s}': {s}", .{name_arg, @errorName(e)});
+    defer freeResPtr(global.arena, name_ptr);
+
+    const update_bin = blk: {
+        const filename_w = try sliceToFileW(filename);
+        break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
+            fatal("BeginUpdateResource '{s}' failed with {s}", .{filename, @tagName(win32.GetLastError())});
+    };
+
+    if (0 == win32fix.UpdateResourceW(
+        update_bin,
+        type_ptr,
+        name_ptr,
+        0, // language, is this neutral?
+        @ptrCast(content.ptr),
+        @intCast(content.len),
+    ))
+        fatal("UpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    if (0 == win32.EndUpdateResourceW(update_bin, 0))
+        fatal("EndUpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    std.log.info("Success", .{});
 }
