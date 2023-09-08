@@ -70,7 +70,7 @@ pub fn main() !void {
             \\Usage:
             \\   winres list <FILE>
             \\   winres get <FILE> <TYPE> <NAME>
-            \\   winres update <FILE> <TYPE> <NAME> <CONTENT>
+            \\   winres update <FILE> <TYPE> <NAME> [--file|--data] <FILE_OR_DATA>
             \\
             \\A resource <TYPE> or <NAME> can be one of:
             \\  * an unsigned integer
@@ -335,12 +335,22 @@ fn get(args: []const [:0]const u8) !void {
 }
 
 fn update(args: []const [:0]const u8) !void {
-    if (args.len != 4)
-        fatal("update requires 4 arguments (file/type/name/content) but got {}", .{args.len});
+    if (args.len != 5)
+        fatal("update requires 5 arguments (file/type/name/data_kind/data_arg) but got {}", .{args.len});
+
     const filename = args[0];
     const type_arg = args[1];
     const name_arg = args[2];
-    const content = args[3];
+
+    const DataKind = enum { content, file };
+    const data: struct { kind: DataKind, arg: []const u8 } = blk: {
+        const data_kind = args[3];
+        if (std.mem.eql(u8, data_kind, "--data"))
+            break :blk .{ .kind = .content, .arg = args[4] };
+        if (std.mem.eql(u8, data_kind, "--file"))
+            break :blk .{ .kind = .file, .arg = args[4] };
+        fatal("unknown data option '{s}' (expected '--data' or '--file')", .{data_kind});
+    };
 
     const type_ptr = parseAllocResType(global.arena, type_arg) catch |e|
         fatal("invalid resource type '{s}': {s}", .{type_arg, @errorName(e)});
@@ -353,6 +363,19 @@ fn update(args: []const [:0]const u8) !void {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
             fatal("BeginUpdateResource '{s}' failed with {s}", .{filename, @tagName(win32.GetLastError())});
+    };
+
+    const content = blk: {
+        switch (data.kind) {
+            .content => break :blk data.arg,
+            .file => {
+                var file = std.fs.cwd().openFile(data.arg, .{}) catch |err|
+                    fatal("open '{s}' failed with {s}", .{data.arg, @errorName(err)});
+                defer file.close();
+                // TODO: use mmap instead, should be faster
+                break :blk try file.readToEndAlloc(global.arena, std.math.maxInt(usize));
+            },
+        }
     };
 
     if (0 == win32fix.UpdateResourceW(
