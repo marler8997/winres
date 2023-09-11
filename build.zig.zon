@@ -1,0 +1,10 @@
+.{
+    .name = "winres",
+    .version = "0.0.0",
+    .dependencies = .{
+        .zigwin32 = .{
+            .url = "https://github.com/marlersoft/zigwin32/archive/967edfddab98255b117b4fac779e589902ad9984.tar.gz",
+            .hash = "1220e5ff7e6899b1791b43ba52969be58f8708950ba1cda7c361dc2f55963580b463",            
+        },
+    },
+}
