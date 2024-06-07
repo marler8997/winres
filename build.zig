@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("win32", zigwin32);
+    exe.root_module.addImport("win32", zigwin32);
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);

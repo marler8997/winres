@@ -31,7 +31,7 @@ const global = struct {
 
 pub fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
     std.log.err(fmt, args);
-    std.os.exit(0xff);
+    std.process.exit(0xff);
 }
 
 pub fn fatalTrace(trace: ?*std.builtin.StackTrace, comptime fmt: []const u8, args: anytype) noreturn {
@@ -41,7 +41,7 @@ pub fn fatalTrace(trace: ?*std.builtin.StackTrace, comptime fmt: []const u8, arg
     } else {
         std.log.err("no error return trace", .{});
     }
-    std.os.exit(0xff);
+    std.process.exit(0xff);
 }
 
 const predefined_names_for_usage = blk: {
@@ -281,7 +281,7 @@ fn listOnEnumTypeW(
 
 fn listOnEnumNameW(
     mod: ?win32.HINSTANCE,
-    res_type: ?[*:0]const u16,
+    res_type: ?[*:0]align(1) const u16,
     name: ?[*:0]u16,
     param: isize,
 ) callconv(@import("std").os.windows.WINAPI) win32.BOOL {
