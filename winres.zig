@@ -9,15 +9,15 @@ const win32fix = struct {
     // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
     pub extern "kernel32" fn FindResourceW(
         hModule: ?win32.HINSTANCE,
-        lpName: ?[*:0]const align(1) u16,
-        lpType: ?[*:0]const align(1) u16,
+        lpName: ?[*:0]align(1) const u16,
+        lpType: ?[*:0]align(1) const u16,
     ) callconv(@import("std").os.windows.WINAPI) ?win32.HRSRC;
     // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
     // also: this adds "const" to lpData
     pub extern "kernel32" fn UpdateResourceW(
         hUpdate: ?win32.HANDLE,
-        lpType: ?[*:0]const align(1) u16,
-        lpName: ?[*:0]const align(1) u16,
+        lpType: ?[*:0]align(1) const u16,
+        lpName: ?[*:0]align(1) const u16,
         wLanguage: u16,
         lpData: ?*const anyopaque,
         cb: u32,
@@ -80,8 +80,7 @@ pub fn main() !void {
             \\Predefined resource types:
             \\
             ++
-            predefined_names_for_usage
-        );
+            predefined_names_for_usage);
 
     const cmd = all_args[1];
     const cmd_args = all_args[2..];
@@ -102,66 +101,66 @@ pub fn sliceToFileW(path: []const u8) !std.os.windows.PathSpace {
     return temp_path;
 }
 
-pub fn resPtrAsInt(res_ptr: ?[*:0]const align(1) u16) ?u16 {
+pub fn resPtrAsInt(res_ptr: ?[*:0]align(1) const u16) ?u16 {
     const res_int: u16 = @intCast(0xffff & @intFromPtr(res_ptr));
     return if (res_int == @intFromPtr(res_ptr)) res_int else null;
 }
 
-const IntResType = enum (u16) {
-    cursor        = 1,
-    bitmap        = 2,
-    icon          = 3,
-    menu          = 4,
-    dialog        = 5,
-    string        = 6,
-    fontdir       = 7,
-    font          = 8,
-    accelerator   = 9,
-    rcdata        = 10,
-    messagetable  = 11,
-    group_cursor  = 12,
-    group_icon    = 14,
-    version       = 16,
-    dlginclude    = 17,
-    plugplay      = 19,
-    vxd           = 20,
-    anicursor     = 21,
-    aniicon       = 22,
-    html          = 23,
-    manifest      = 24,
+const IntResType = enum(u16) {
+    cursor = 1,
+    bitmap = 2,
+    icon = 3,
+    menu = 4,
+    dialog = 5,
+    string = 6,
+    fontdir = 7,
+    font = 8,
+    accelerator = 9,
+    rcdata = 10,
+    messagetable = 11,
+    group_cursor = 12,
+    group_icon = 14,
+    version = 16,
+    dlginclude = 17,
+    plugplay = 19,
+    vxd = 20,
+    anicursor = 21,
+    aniicon = 22,
+    html = 23,
+    manifest = 24,
     _,
 
-    pub fn tryFrom(res_type_ptr: ?[*:0]const align(1) u16) ?IntResType {
+    pub fn tryFrom(res_type_ptr: ?[*:0]align(1) const u16) ?IntResType {
         return if (resPtrAsInt(res_type_ptr)) |int| @enumFromInt(int) else null;
     }
 
-    pub fn asPtr(self: IntResType) ?[*:0]const align(1) u16 {
+    pub fn asPtr(self: IntResType) ?[*:0]align(1) const u16 {
         return @ptrFromInt(@intFromEnum(self));
     }
 
     pub fn str(self: IntResType) ?[]const u8 {
         return switch (self) {
-            .cursor        => "cursor",
-            .bitmap        => "bitmap",
-            .icon          => "icon",
-            .menu          => "menu",
-            .dialog        => "dialog",
-            .string        => "string",
-            .fontdir       => "fontdir",
-            .font          => "font",
-            .accelerator   => "accelerator",
-            .rcdata        => "rcdata",
-            .messagetable  => "messagetable",
-            .group_cursor  => "group_cursor",
-            .group_icon    => "group_icon",
-            .version       => "version",
-            .dlginclude    => "dlginclude",
-            .plugplay      => "plugplay",
-            .vxd           => "vxd",
-            .anicursor     => "anicursor",
-            .aniicon       => "aniicon",
-            .html          => "html",
-            .manifest      => "manifest",
+            .cursor => "cursor",
+            .bitmap => "bitmap",
+            .icon => "icon",
+            .menu => "menu",
+            .dialog => "dialog",
+            .string => "string",
+            .fontdir => "fontdir",
+            .font => "font",
+            .accelerator => "accelerator",
+            .rcdata => "rcdata",
+            .messagetable => "messagetable",
+            .group_cursor => "group_cursor",
+            .group_icon => "group_icon",
+            .version => "version",
+            .dlginclude => "dlginclude",
+            .plugplay => "plugplay",
+            .vxd => "vxd",
+            .anicursor => "anicursor",
+            .aniicon => "aniicon",
+            .html => "html",
+            .manifest => "manifest",
             else => null,
         };
     }
@@ -171,7 +170,7 @@ fn parseAllocResName(allocator: std.mem.Allocator, arg: []const u8) error{
     Overflow,
     OutOfMemory,
     InvalidUtf8,
-}!?[*:0]const align(1) u16 {
+}!?[*:0]align(1) const u16 {
     if (std.fmt.parseInt(u16, arg, 10)) |int_value| {
         return @ptrFromInt(int_value);
     } else |err| switch (err) {
@@ -185,7 +184,7 @@ fn parseAllocResType(allocator: std.mem.Allocator, arg: []const u8) error{
     Overflow,
     OutOfMemory,
     InvalidUtf8,
-}!?[*:0]const align(1) u16 {
+}!?[*:0]align(1) const u16 {
     const predefined_prefix = ":";
 
     // TODO: allow use of "::" to specify a string that starts with a ":"
@@ -201,13 +200,13 @@ fn parseAllocResType(allocator: std.mem.Allocator, arg: []const u8) error{
 
     return parseAllocResName(allocator, arg);
 }
-fn freeResPtr(allocator: std.mem.Allocator, ptr: ?[*:0]const align(1) u16) void {
+fn freeResPtr(allocator: std.mem.Allocator, ptr: ?[*:0]align(1) const u16) void {
     if (resPtrAsInt(ptr)) |_| return;
     allocator.free(std.mem.span(@as([*:0]const u16, @alignCast(ptr.?))));
 }
 
 const ResTypeFormatter = struct {
-    ptr: ?[*:0]const align(1) u16,
+    ptr: ?[*:0]align(1) const u16,
     pub fn format(
         self: ResTypeFormatter,
         comptime fmt: []const u8,
@@ -218,7 +217,7 @@ const ResTypeFormatter = struct {
         _ = options;
         if (IntResType.tryFrom(self.ptr)) |t| {
             const str: []const u8 = t.str() orelse "?";
-            try writer.print("{}({s})", .{@intFromEnum(t), str});
+            try writer.print("{}({s})", .{ @intFromEnum(t), str });
         } else {
             const ptr: [*:0]const u16 = @alignCast(self.ptr orelse unreachable);
             const str = std.mem.span(ptr);
@@ -228,7 +227,7 @@ const ResTypeFormatter = struct {
 };
 
 const ResNameFormatter = struct {
-    ptr: ?[*:0]const align(1) u16,
+    ptr: ?[*:0]align(1) const u16,
     pub fn format(
         self: ResNameFormatter,
         comptime fmt: []const u8,
@@ -254,7 +253,7 @@ fn list(args: []const [:0]const u8) !void {
     const mod = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
-            fatal("LoadLibrary '{s}' failed, error={}", .{filename, win32.GetLastError()});
+            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError() });
     };
     // no need to free library, this is all temporary
 
@@ -303,16 +302,16 @@ fn get(args: []const [:0]const u8) !void {
     const name_arg = args[2];
 
     const type_ptr = parseAllocResType(global.arena, type_arg) catch |e|
-        fatal("invalid resource type '{s}': {s}", .{type_arg, @errorName(e)});
+        fatal("invalid resource type '{s}': {s}", .{ type_arg, @errorName(e) });
     defer freeResPtr(global.arena, type_ptr);
     const name_ptr = parseAllocResName(global.arena, name_arg) catch |e|
-        fatal("invalid resource name '{s}': {s}", .{name_arg, @errorName(e)});
+        fatal("invalid resource name '{s}': {s}", .{ name_arg, @errorName(e) });
     defer freeResPtr(global.arena, name_ptr);
 
     const mod = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
-            fatal("LoadLibrary '{s}' failed, error={}", .{filename, win32.GetLastError()});
+            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError() });
     };
     // no need to free library, this is all temporary
 
@@ -327,11 +326,9 @@ fn get(args: []const [:0]const u8) !void {
     if (res == 0)
         fatal("LoadResource failed with {s}", .{@tagName(win32.GetLastError())});
 
-    const ptr: [*]u8 = @ptrCast(
-        win32.LockResource(res) orelse
-            fatal("LockResource failed with {s}", .{@tagName(win32.GetLastError())})
-    );
-    try std.io.getStdOut().writer().writeAll(ptr[0 .. len]);
+    const ptr: [*]u8 = @ptrCast(win32.LockResource(res) orelse
+        fatal("LockResource failed with {s}", .{@tagName(win32.GetLastError())}));
+    try std.io.getStdOut().writer().writeAll(ptr[0..len]);
 }
 
 fn update(args: []const [:0]const u8) !void {
@@ -353,16 +350,16 @@ fn update(args: []const [:0]const u8) !void {
     };
 
     const type_ptr = parseAllocResType(global.arena, type_arg) catch |e|
-        fatal("invalid resource type '{s}': {s}", .{type_arg, @errorName(e)});
+        fatal("invalid resource type '{s}': {s}", .{ type_arg, @errorName(e) });
     defer freeResPtr(global.arena, type_ptr);
     const name_ptr = parseAllocResName(global.arena, name_arg) catch |e|
-        fatal("invalid resource name '{s}': {s}", .{name_arg, @errorName(e)});
+        fatal("invalid resource name '{s}': {s}", .{ name_arg, @errorName(e) });
     defer freeResPtr(global.arena, name_ptr);
 
     const update_bin = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
-            fatal("BeginUpdateResource '{s}' failed with {s}", .{filename, @tagName(win32.GetLastError())});
+            fatal("BeginUpdateResource '{s}' failed with {s}", .{ filename, @tagName(win32.GetLastError()) });
     };
 
     const content = blk: {
@@ -370,7 +367,7 @@ fn update(args: []const [:0]const u8) !void {
             .content => break :blk data.arg,
             .file => {
                 var file = std.fs.cwd().openFile(data.arg, .{}) catch |err|
-                    fatal("open '{s}' failed with {s}", .{data.arg, @errorName(err)});
+                    fatal("open '{s}' failed with {s}", .{ data.arg, @errorName(err) });
                 defer file.close();
                 // TODO: use mmap instead, should be faster
                 break :blk try file.readToEndAlloc(global.arena, std.math.maxInt(usize));
