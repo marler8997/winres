@@ -234,7 +234,7 @@ fn list(args: []const [:0]const u8) !void {
     const mod = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
-            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError() });
+            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError().fmt() });
     };
     // no need to free library, this is all temporary
 
@@ -244,7 +244,7 @@ fn list(args: []const [:0]const u8) !void {
             std.log.info("this file has no resources", .{});
             return;
         }
-        fatal("EnumResourceTypes failed, error={}", .{win32.GetLastError()});
+        fatal("EnumResourceTypes failed, error={}", .{win32.GetLastError().fmt()});
     }
 }
 
@@ -255,7 +255,7 @@ fn listOnEnumTypeW(
 ) callconv(@import("std").os.windows.WINAPI) win32.BOOL {
     _ = param;
     if (0 == win32.EnumResourceNamesExW(mod, res_type_ptr, &listOnEnumNameW, 0, 0, 0))
-        fatal("EnumResourceNames failed, error={}", .{win32.GetLastError()});
+        fatal("EnumResourceNames failed, error={}", .{win32.GetLastError().fmt()});
     return 1; // continue enumeration
 }
 
@@ -292,23 +292,23 @@ fn get(args: []const [:0]const u8) !void {
     const mod = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
-            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError() });
+            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError().fmt() });
     };
     // no need to free library, this is all temporary
 
     const loc = win32.FindResourceW(mod, name_ptr, type_ptr) orelse
-        fatal("FindResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("FindResource failed with {}", .{win32.GetLastError().fmt()});
 
     const len = win32.SizeofResource(mod, loc);
     if (len == 0)
-        fatal("SizeofResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("SizeofResource failed with {}", .{win32.GetLastError().fmt()});
 
     const res = win32.LoadResource(mod, loc);
     if (res == 0)
-        fatal("LoadResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("LoadResource failed with {}", .{win32.GetLastError().fmt()});
 
     const ptr: [*]u8 = @ptrCast(win32.LockResource(res) orelse
-        fatal("LockResource failed with {s}", .{@tagName(win32.GetLastError())}));
+        fatal("LockResource failed with {}", .{win32.GetLastError().fmt()}));
     try std.io.getStdOut().writer().writeAll(ptr[0..len]);
 }
 
@@ -340,7 +340,7 @@ fn update(args: []const [:0]const u8) !void {
     const update_bin = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
-            fatal("BeginUpdateResource '{s}' failed with {s}", .{ filename, @tagName(win32.GetLastError()) });
+            fatal("BeginUpdateResource '{s}' failed with {}", .{ filename, win32.GetLastError().fmt() });
     };
 
     const content = blk: {
@@ -364,10 +364,10 @@ fn update(args: []const [:0]const u8) !void {
         @constCast(@ptrCast(content.ptr)),
         @intCast(content.len),
     ))
-        fatal("UpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("UpdateResource failed with {}", .{win32.GetLastError().fmt()});
 
     if (0 == win32.EndUpdateResourceW(update_bin, 0))
-        fatal("EndUpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("EndUpdateResource failed with {}", .{win32.GetLastError().fmt()});
 
     std.log.info("Success", .{});
 }
@@ -390,7 +390,7 @@ fn remove(args: []const [:0]const u8) !void {
     const update_bin = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
-            fatal("BeginUpdateResource '{s}' failed with {s}", .{ filename, @tagName(win32.GetLastError()) });
+            fatal("BeginUpdateResource '{s}' failed with {}", .{ filename, win32.GetLastError().fmt() });
     };
 
     if (0 == win32.UpdateResourceW(
@@ -401,10 +401,10 @@ fn remove(args: []const [:0]const u8) !void {
         null,
         0,
     ))
-        fatal("UpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("UpdateResource failed with {}", .{win32.GetLastError().fmt()});
 
     if (0 == win32.EndUpdateResourceW(update_bin, 0))
-        fatal("EndUpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+        fatal("EndUpdateResource failed with {}", .{win32.GetLastError().fmt()});
 
     std.log.info("Success", .{});
 }
