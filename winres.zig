@@ -49,6 +49,7 @@ pub fn main() !void {
             \\   winres list <FILE>
             \\   winres get <FILE> <TYPE> <NAME>
             \\   winres update <FILE> <TYPE> <NAME> [--file|--data] <FILE_OR_DATA>
+            \\   winres remove <FILE> <TYPE> <NAME>
             \\
             \\A resource <TYPE> or <NAME> can be one of:
             \\  * an unsigned integer
@@ -69,6 +70,8 @@ pub fn main() !void {
         try get(cmd_args);
     } else if (std.mem.eql(u8, cmd, "update")) {
         try update(cmd_args);
+    } else if (std.mem.eql(u8, cmd, "remove")) {
+        try remove(cmd_args);
     } else fatal("unknown command '{s}'", .{cmd});
 }
 
@@ -360,6 +363,43 @@ fn update(args: []const [:0]const u8) !void {
         0, // language, is this neutral?
         @constCast(@ptrCast(content.ptr)),
         @intCast(content.len),
+    ))
+        fatal("UpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    if (0 == win32.EndUpdateResourceW(update_bin, 0))
+        fatal("EndUpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
+
+    std.log.info("Success", .{});
+}
+
+fn remove(args: []const [:0]const u8) !void {
+    if (args.len != 3)
+        fatal("remove 3 arguments (file/type/name) but got {}", .{args.len});
+
+    const filename = args[0];
+    const type_arg = args[1];
+    const name_arg = args[2];
+
+    const type_ptr = parseAllocResType(global.arena, type_arg) catch |e|
+        fatal("invalid resource type '{s}': {s}", .{ type_arg, @errorName(e) });
+    defer freeResPtr(global.arena, type_ptr);
+    const name_ptr = parseAllocResName(global.arena, name_arg) catch |e|
+        fatal("invalid resource name '{s}': {s}", .{ name_arg, @errorName(e) });
+    defer freeResPtr(global.arena, name_ptr);
+
+    const update_bin = blk: {
+        const filename_w = try sliceToFileW(filename);
+        break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
+            fatal("BeginUpdateResource '{s}' failed with {s}", .{ filename, @tagName(win32.GetLastError()) });
+    };
+
+    if (0 == win32.UpdateResourceW(
+        update_bin,
+        type_ptr,
+        name_ptr,
+        0, // language, is this neutral?
+        null,
+        0,
     ))
         fatal("UpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
 
