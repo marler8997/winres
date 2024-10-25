@@ -1,28 +1,6 @@
 const std = @import("std");
 
-const win32 = struct {
-    usingnamespace @import("win32").foundation;
-    usingnamespace @import("win32").system.library_loader;
-    usingnamespace @import("win32").ui.windows_and_messaging;
-};
-const win32fix = struct {
-    // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
-    pub extern "kernel32" fn FindResourceW(
-        hModule: ?win32.HINSTANCE,
-        lpName: ?[*:0]align(1) const u16,
-        lpType: ?[*:0]align(1) const u16,
-    ) callconv(@import("std").os.windows.WINAPI) ?win32.HRSRC;
-    // workaround the unaligned pointer issue: https://github.com/marlersoft/zigwin32gen/issues/9
-    // also: this adds "const" to lpData
-    pub extern "kernel32" fn UpdateResourceW(
-        hUpdate: ?win32.HANDLE,
-        lpType: ?[*:0]align(1) const u16,
-        lpName: ?[*:0]align(1) const u16,
-        wLanguage: u16,
-        lpData: ?*const anyopaque,
-        cb: u32,
-    ) callconv(@import("std").os.windows.WINAPI) win32.BOOL;
-};
+const win32 = @import("win32").everything;
 
 const global = struct {
     var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -315,7 +293,7 @@ fn get(args: []const [:0]const u8) !void {
     };
     // no need to free library, this is all temporary
 
-    const loc = win32fix.FindResourceW(mod, name_ptr, type_ptr) orelse
+    const loc = win32.FindResourceW(mod, name_ptr, type_ptr) orelse
         fatal("FindResource failed with {s}", .{@tagName(win32.GetLastError())});
 
     const len = win32.SizeofResource(mod, loc);
@@ -375,12 +353,12 @@ fn update(args: []const [:0]const u8) !void {
         }
     };
 
-    if (0 == win32fix.UpdateResourceW(
+    if (0 == win32.UpdateResourceW(
         update_bin,
         type_ptr,
         name_ptr,
         0, // language, is this neutral?
-        @ptrCast(content.ptr),
+        @constCast(@ptrCast(content.ptr)),
         @intCast(content.len),
     ))
         fatal("UpdateResource failed with {s}", .{@tagName(win32.GetLastError())});
