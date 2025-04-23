@@ -58,7 +58,7 @@ pub fn main() !void {
             \\
             \\Predefined resource types:
             \\
-            ++
+        ++
             predefined_names_for_usage);
 
     const cmd = all_args[1];
@@ -158,7 +158,7 @@ fn parseAllocResName(allocator: std.mem.Allocator, arg: []const u8) error{
         error.Overflow => |e| return e,
         error.InvalidCharacter => {},
     }
-    return try std.unicode.utf8ToUtf16LeWithNull(allocator, arg);
+    return try std.unicode.utf8ToUtf16LeAllocZ(allocator, arg);
 }
 fn parseAllocResType(allocator: std.mem.Allocator, arg: []const u8) error{
     NotPredefined,
@@ -202,7 +202,7 @@ const ResTypeFormatter = struct {
         } else {
             const ptr: [*:0]const u16 = @alignCast(self.ptr orelse unreachable);
             const str = std.mem.span(ptr);
-            try writer.print("\"{}\"", .{std.unicode.fmtUtf16le(str)});
+            try writer.print("\"{}\"", .{std.unicode.fmtUtf16Le(str)});
         }
     }
 };
@@ -222,7 +222,7 @@ const ResNameFormatter = struct {
         } else {
             const ptr: [*:0]const u16 = @alignCast(self.ptr orelse unreachable);
             const str = std.mem.span(ptr);
-            try writer.print("\"{}\"", .{std.unicode.fmtUtf16le(str)});
+            try writer.print("\"{}\"", .{std.unicode.fmtUtf16Le(str)});
         }
     }
 };
@@ -234,7 +234,7 @@ fn list(args: []const [:0]const u8) !void {
     const mod = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
-            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError().fmt() });
+            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError() });
     };
     // no need to free library, this is all temporary
 
@@ -244,7 +244,7 @@ fn list(args: []const [:0]const u8) !void {
             std.log.info("this file has no resources", .{});
             return;
         }
-        fatal("EnumResourceTypes failed, error={}", .{win32.GetLastError().fmt()});
+        fatal("EnumResourceTypes failed, error={}", .{win32.GetLastError()});
     }
 }
 
@@ -255,7 +255,7 @@ fn listOnEnumTypeW(
 ) callconv(@import("std").os.windows.WINAPI) win32.BOOL {
     _ = param;
     if (0 == win32.EnumResourceNamesExW(mod, res_type_ptr, &listOnEnumNameW, 0, 0, 0))
-        fatal("EnumResourceNames failed, error={}", .{win32.GetLastError().fmt()});
+        fatal("EnumResourceNames failed, error={}", .{win32.GetLastError()});
     return 1; // continue enumeration
 }
 
@@ -292,23 +292,23 @@ fn get(args: []const [:0]const u8) !void {
     const mod = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
-            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError().fmt() });
+            fatal("LoadLibrary '{s}' failed, error={}", .{ filename, win32.GetLastError() });
     };
     // no need to free library, this is all temporary
 
     const loc = win32.FindResourceW(mod, name_ptr, type_ptr) orelse
-        fatal("FindResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("FindResource failed, error={}", .{win32.GetLastError()});
 
     const len = win32.SizeofResource(mod, loc);
     if (len == 0)
-        fatal("SizeofResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("SizeofResource failed, error={}", .{win32.GetLastError()});
 
     const res = win32.LoadResource(mod, loc);
     if (res == 0)
-        fatal("LoadResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("LoadResource failed, error={}", .{win32.GetLastError()});
 
     const ptr: [*]u8 = @ptrCast(win32.LockResource(res) orelse
-        fatal("LockResource failed with {}", .{win32.GetLastError().fmt()}));
+        fatal("LockResource failed, error={}", .{win32.GetLastError()}));
     try std.io.getStdOut().writer().writeAll(ptr[0..len]);
 }
 
@@ -340,7 +340,7 @@ fn update(args: []const [:0]const u8) !void {
     const update_bin = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
-            fatal("BeginUpdateResource '{s}' failed with {}", .{ filename, win32.GetLastError().fmt() });
+            fatal("BeginUpdateResource '{s}' failed, error={}", .{ filename, win32.GetLastError() });
     };
 
     const content = blk: {
@@ -364,10 +364,10 @@ fn update(args: []const [:0]const u8) !void {
         @constCast(@ptrCast(content.ptr)),
         @intCast(content.len),
     ))
-        fatal("UpdateResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("UpdateResource failed, error={}", .{win32.GetLastError()});
 
     if (0 == win32.EndUpdateResourceW(update_bin, 0))
-        fatal("EndUpdateResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("EndUpdateResource failed, error={}", .{win32.GetLastError()});
 
     std.log.info("Success", .{});
 }
@@ -390,7 +390,7 @@ fn remove(args: []const [:0]const u8) !void {
     const update_bin = blk: {
         const filename_w = try sliceToFileW(filename);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
-            fatal("BeginUpdateResource '{s}' failed with {}", .{ filename, win32.GetLastError().fmt() });
+            fatal("BeginUpdateResource '{s}' failed, error={}", .{ filename, win32.GetLastError() });
     };
 
     if (0 == win32.UpdateResourceW(
@@ -401,10 +401,10 @@ fn remove(args: []const [:0]const u8) !void {
         null,
         0,
     ))
-        fatal("UpdateResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("UpdateResource failed, error={}", .{win32.GetLastError()});
 
     if (0 == win32.EndUpdateResourceW(update_bin, 0))
-        fatal("EndUpdateResource failed with {}", .{win32.GetLastError().fmt()});
+        fatal("EndUpdateResource failed, error={}", .{win32.GetLastError()});
 
     std.log.info("Success", .{});
 }

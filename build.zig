@@ -5,16 +5,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zigwin32_dep = b.dependency("zigwin32", .{});
-    const zigwin32 = zigwin32_dep.module("zigwin32");
+    const win32_dep = b.dependency("win32", .{});
+    const win32_mod = win32_dep.module("win32");
 
     const exe = b.addExecutable(.{
         .name = "winres",
-        .root_source_file = b.path("winres.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("winres.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "win32", .module = win32_mod },
+            },
+        }),
     });
-    exe.root_module.addImport("win32", zigwin32);
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
