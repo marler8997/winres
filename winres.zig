@@ -2,9 +2,15 @@ const std = @import("std");
 
 const win32 = @import("win32").everything;
 
+pub const std_options: std.Options = .{
+    .networking = false,
+    .io_vtable = .threaded,
+};
+
 const global = struct {
     var arena_instance = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const arena = arena_instance.allocator();
+    const io = std.Io.Threaded.global_single_threaded.io();
 };
 
 pub fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
@@ -15,7 +21,7 @@ pub fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
 pub fn fatalTrace(trace: ?*std.builtin.StackTrace, comptime fmt: []const u8, args: anytype) noreturn {
     std.log.err(fmt, args);
     if (trace) |t| {
-        std.debug.dumpStackTrace(t.*);
+        std.debug.dumpErrorReturnTrace(t);
     } else {
         std.log.err("no error return trace", .{});
     }
@@ -28,23 +34,23 @@ const predefined_names_for_usage = blk: {
     const line_prefix = "   ";
     var next_sep: []const u8 = line_prefix;
     var line_len: usize = 0;
-    for (std.meta.fields(IntResType)) |field| {
-        line_len += next_sep.len + 1 + field.name.len;
+    for (@typeInfo(IntResType).@"enum".field_names) |name| {
+        line_len += next_sep.len + 1 + name.len;
         if (line_len >= 80) {
             next_sep = "\n" ++ line_prefix;
-            line_len = line_prefix.len + field.name.len;
+            line_len = line_prefix.len + name.len;
         }
-        names = names ++ next_sep ++ ":" ++ field.name;
+        names = names ++ next_sep ++ ":" ++ name;
         next_sep = " ";
     }
     break :blk names ++ "\n";
 };
 
-pub fn main() !void {
-    const all_args = std.process.argsAlloc(global.arena) catch |e|
+pub fn main(init: std.process.Init.Minimal) !void {
+    const all_args = init.args.toSlice(global.arena) catch |e|
         fatalTrace(@errorReturnTrace(), "failed to get cmdline args with {s}", .{@errorName(e)});
     if (all_args.len <= 1)
-        return try std.fs.File.stderr().writeAll(
+        return try std.Io.File.stderr().writeStreamingAll(global.io,
             \\Usage:
             \\   winres list <FILE>
             \\   winres get <FILE> <TYPE> <NAME>
@@ -75,11 +81,18 @@ pub fn main() !void {
     } else fatal("unknown command '{s}'", .{cmd});
 }
 
-pub fn sliceToFileW(path: []const u8) !std.os.windows.PathSpace {
-    var temp_path: std.os.windows.PathSpace = undefined;
-    temp_path.len = try std.unicode.utf8ToUtf16Le(&temp_path.data, path);
-    temp_path.data[temp_path.len] = 0;
-    return temp_path;
+const PathW = struct {
+    data: [std.os.windows.PATH_MAX_WIDE:0]u16,
+    len: usize,
+    pub fn span(self: *const PathW) [:0]const u16 {
+        return self.data[0..self.len :0];
+    }
+};
+
+pub fn sliceToFileW(path: []const u8, out: *PathW) !void {
+    if (path.len > out.data.len) return error.NameTooLong;
+    out.len = try std.unicode.utf8ToUtf16Le(&out.data, path);
+    out.data[out.len] = 0;
 }
 
 pub fn resPtrAsInt(res_ptr: ?[*:0]align(1) const u16) ?u16 {
@@ -172,9 +185,9 @@ fn parseAllocResType(allocator: std.mem.Allocator, arg: []const u8) error{
     if (std.mem.startsWith(u8, arg, predefined_prefix)) {
         const predefined_name = arg[predefined_prefix.len..];
         // TODO: a map might be better?
-        inline for (std.meta.fields(IntResType)) |field| {
-            if (std.mem.eql(u8, field.name, predefined_name))
-                return @as(IntResType, @enumFromInt(field.value)).asPtr();
+        inline for (@typeInfo(IntResType).@"enum".field_names) |name| {
+            if (std.mem.eql(u8, name, predefined_name))
+                return @field(IntResType, name).asPtr();
         }
         return error.NotPredefined;
     }
@@ -218,7 +231,8 @@ fn list(args: []const [:0]const u8) !void {
         fatal("list requires 1 argument (a binary filename) but got {}", .{args.len});
     const filename = args[0];
     const mod = blk: {
-        const filename_w = try sliceToFileW(filename);
+        var filename_w: PathW = undefined;
+        try sliceToFileW(filename, &filename_w);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
             fatal("LoadLibrary '{s}' failed, error={f}", .{ filename, win32.GetLastError() });
     };
@@ -255,12 +269,16 @@ fn listOnEnumNameW(
     _ = param;
     // TODO: write to buffered writer instead
     var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    writer.interface.print("Type={f} Name={f}\n", .{
-        ResTypeFormatter{ .ptr = res_type },
-        ResNameFormatter{ .ptr = name },
-    }) catch |e| fatalTrace(@errorReturnTrace(), "stdout print failed with {s}", .{@errorName(e)});
-    writer.interface.flush() catch |e| fatalTrace(@errorReturnTrace(), "stdout print failed with {s}", .{@errorName(e)});
+    var writer = std.Io.File.stderr().writer(global.io, &buffer);
+    const write_err: ?error{WriteFailed} = blk: {
+        writer.interface.print("Type={f} Name={f}\n", .{
+            ResTypeFormatter{ .ptr = res_type },
+            ResNameFormatter{ .ptr = name },
+        }) catch |e| break :blk e;
+        writer.interface.flush() catch |e| break :blk e;
+        break :blk null;
+    };
+    if (write_err) |_| fatal("write to stderr failed with {s}", .{@errorName(writer.err.?)});
 
     return 1; // continue enumeration
 }
@@ -280,7 +298,8 @@ fn get(args: []const [:0]const u8) !void {
     defer freeResPtr(global.arena, name_ptr);
 
     const mod = blk: {
-        const filename_w = try sliceToFileW(filename);
+        var filename_w: PathW = undefined;
+        try sliceToFileW(filename, &filename_w);
         break :blk win32.LoadLibraryW(filename_w.span()) orelse
             fatal("LoadLibrary '{s}' failed, error={f}", .{ filename, win32.GetLastError() });
     };
@@ -299,7 +318,7 @@ fn get(args: []const [:0]const u8) !void {
 
     const ptr: [*]u8 = @ptrCast(win32.LockResource(res) orelse
         fatal("LockResource failed, error={f}", .{win32.GetLastError()}));
-    try std.fs.File.stdout().writeAll(ptr[0..len]);
+    try std.Io.File.stdout().writeStreamingAll(global.io, ptr[0..len]);
 }
 
 fn update(args: []const [:0]const u8) !void {
@@ -328,7 +347,8 @@ fn update(args: []const [:0]const u8) !void {
     defer freeResPtr(global.arena, name_ptr);
 
     const update_bin = blk: {
-        const filename_w = try sliceToFileW(filename);
+        var filename_w: PathW = undefined;
+        try sliceToFileW(filename, &filename_w);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
             fatal("BeginUpdateResource '{s}' failed, error={f}", .{ filename, win32.GetLastError() });
     };
@@ -336,13 +356,13 @@ fn update(args: []const [:0]const u8) !void {
     const content = blk: {
         switch (data.kind) {
             .content => break :blk data.arg,
-            .file => {
-                var file = std.fs.cwd().openFile(data.arg, .{}) catch |err|
-                    fatal("open '{s}' failed with {s}", .{ data.arg, @errorName(err) });
-                defer file.close();
-                // TODO: use mmap instead, should be faster
-                break :blk try file.readToEndAlloc(global.arena, std.math.maxInt(usize));
-            },
+            // TODO: use mmap instead, should be faster
+            .file => break :blk std.Io.Dir.cwd().readFileAlloc(
+                global.io,
+                data.arg,
+                global.arena,
+                .unlimited,
+            ) catch |err| fatal("read '{s}' failed with {s}", .{ data.arg, @errorName(err) }),
         }
     };
 
@@ -378,7 +398,8 @@ fn remove(args: []const [:0]const u8) !void {
     defer freeResPtr(global.arena, name_ptr);
 
     const update_bin = blk: {
-        const filename_w = try sliceToFileW(filename);
+        var filename_w: PathW = undefined;
+        try sliceToFileW(filename, &filename_w);
         break :blk win32.BeginUpdateResourceW(filename_w.span(), 0) orelse
             fatal("BeginUpdateResource '{s}' failed, error={f}", .{ filename, win32.GetLastError() });
     };
